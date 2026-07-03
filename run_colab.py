@@ -27,9 +27,12 @@ PUSH_EVERY = int(os.environ.get("PUSH_EVERY", "600"))
 
 def git_push(msg):
     """Commit + push the checkpoint. Commit is a harmless no-op when the file
-    hasn't changed; we print the push exit code either way."""
+    hasn't changed. We rebase onto origin first so a push still fast-forwards
+    even if the remote moved (e.g. an edit pushed from another machine); our
+    commit only touches CKPT, so the rebase never conflicts."""
     subprocess.run(["git", "add", CKPT], cwd=REPO)
     subprocess.run(["git", "commit", "-q", "-m", msg], cwd=REPO)
+    subprocess.run(["git", "pull", "--rebase", "-q"], cwd=REPO)
     r = subprocess.run(["git", "push", "-q"], cwd=REPO)
     print(f"[run_colab] push ({msg}) exit={r.returncode}", flush=True)
 
