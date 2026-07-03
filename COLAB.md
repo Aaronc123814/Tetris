@@ -2,20 +2,20 @@
 
 `tetris_cnn.py` auto-detects CUDA, full-state checkpoints to `tetris_cnn.pt`
 every `--save-every` episodes, and resumes with `--resume`. Colab sessions are
-ephemeral, so the workflow below pushes the checkpoint back to this repo
-periodically — a disconnect costs at most ~10 minutes of progress, and a fresh
-session just re-clones and resumes.
+ephemeral, so `run_colab.py` runs the trainer and pushes the checkpoint back to
+this repo every 10 minutes — a disconnect costs at most ~10 minutes of progress,
+and a fresh session just re-clones and resumes.
+
+Everything below is single-line cells: paste-safe, nothing multi-line to mangle.
 
 ## 1. Enable the GPU
 
 `Runtime → Change runtime type → GPU (T4)`.
 
-## 2. Clone (repo is public, so no token needed to read)
+## 2. Clone (public repo — no token needed to read; brings the latest checkpoint)
 
 ```python
-REPO = "Tetris"
-!git clone https://github.com/Aaronc123814/Tetris.git /content/$REPO
-%cd /content/$REPO
+!git clone https://github.com/Aaronc123814/Tetris.git /content/Tetris
 ```
 
 ## 3. Configure git identity + a push token
@@ -28,61 +28,69 @@ GitHub → Settings → Developer settings.
 from getpass import getpass
 USER  = "Aaronc123814"
 TOKEN = getpass("GitHub personal access token: ")
-!git config user.email "aaronchacko98@gmail.com"
-!git config user.name  "{USER}"
-!git remote set-url origin https://{USER}:{TOKEN}@github.com/{USER}/Tetris.git
+!cd /content/Tetris && git config user.email "aaronchacko98@gmail.com" && git config user.name "{USER}" && git remote set-url origin https://{USER}:{TOKEN}@github.com/{USER}/Tetris.git
 ```
 
-## 4. Dependencies (usually a no-op on Colab)
+Torch and numpy are preinstalled on Colab, so no separate install cell is needed.
+
+## 4. Train + auto-push the checkpoint
 
 ```python
-!pip -q install numpy torch
+!cd /content/Tetris && python run_colab.py
 ```
 
-## 5. Train + auto-push the checkpoint every 10 minutes
+`run_colab.py` runs `tetris_cnn.py train --resume tetris_cnn.pt` and, every 10
+minutes while training is alive, commits + pushes `tetris_cnn.pt`. You'll see
+training logs scroll and `[run_colab] push (checkpoint) exit=0` lines every 10
+minutes.
+
+**Options** (env vars on the same line):
 
 ```python
-import subprocess, time, threading
+# push every 2 min + checkpoint every 10 episodes — verifies pushing quickly
+!cd /content/Tetris && PUSH_EVERY=120 SAVE_EVERY=10 python run_colab.py
 
-repo = "/content/Tetris"
-train = subprocess.Popen(
-    ["python", "tetris_cnn.py", "train",
-     "--episodes", "10000",
-     "--device", "cuda",
-     "--batch-size", "1024",        # T4 has the VRAM; cuts gradient noise
-     "--resume", "tetris_cnn.pt",   # picks up where the last session left off
-     "--save-every", "50"],
-    cwd=repo)
-
-def push_loop():
-    while train.poll() is None:
-        time.sleep(600)  # every 10 minutes
-        subprocess.run(["git", "add", "tetris_cnn.pt"], cwd=repo)
-        # commit is a no-op (nonzero exit) when nothing changed — that's fine
-        subprocess.run(["git", "commit", "-q", "-m", "checkpoint"], cwd=repo)
-        subprocess.run(["git", "push", "-q"], cwd=repo)
-
-threading.Thread(target=push_loop, daemon=True).start()
-train.wait()
-
-# final push once training finishes
-subprocess.run(["git", "add", "tetris_cnn.pt"], cwd=repo)
-subprocess.run(["git", "commit", "-q", "-m", "checkpoint (final)"], cwd=repo)
-subprocess.run(["git", "push", "-q"], cwd=repo)
+# longer run / bigger batches
+!cd /content/Tetris && EPISODES=20000 BATCH_SIZE=2048 python run_colab.py
 ```
+
+Defaults: `EPISODES=5000  BATCH_SIZE=1024  SAVE_EVERY=50  PUSH_EVERY=600`.
 
 ## Resuming after a disconnect
 
-Start a fresh Colab, re-run cells 2–5. Cell 2 re-clones the latest
-`tetris_cnn.pt`, and `--resume` restores full state. `--episodes` is the *total*
-budget (resume counts toward it), so training continues seamlessly.
+The VM is wiped on disconnect, so re-clone (no `git pull` needed — the clone is
+current). Re-run **cells 2, 3, 4**:
+
+```python
+!git clone https://github.com/Aaronc123814/Tetris.git /content/Tetris
+# then cell 3 (token) and cell 4 (python run_colab.py)
+```
+
+`--resume tetris_cnn.pt` restores full state and `--episodes` is the *total*
+budget (resume counts toward it), so training continues seamlessly. Look for
+`Resumed from tetris_cnn.pt: episode N/5000` in the output.
+
+## Watching the trained agent
+
+`play` needs a display, so run it **locally**, not on Colab, after pulling the
+latest checkpoint:
+
+```bash
+git pull
+python tetris_cnn.py play
+```
 
 ## Notes
 
 - **Checkpoint size / repo bloat.** With the replay buffer saved, `tetris_cnn.pt`
   is ~20 MB and every push adds a new copy to git history. Add `--no-save-buffer`
-  to the train command for tiny checkpoints (resume starts with an empty buffer,
-  costing a short re-warmup). Otherwise, `git gc` / squash history later.
+  to the `tetris_cnn.py train` call in `run_colab.py` for tiny checkpoints (resume
+  starts with an empty buffer, costing a short re-warmup). Otherwise, `git gc` /
+  squash history later.
+- **Architecture flags must match on resume.** A checkpoint records its
+  `--features` / `--head` / `--norm`; resuming requires the same values (the code
+  errors clearly if they differ). The current `tetris_cnn.pt` uses the defaults
+  (`rich` / `pool` / `group`), so no extra flags are needed.
 - **Colab limits.** Idle disconnect ~90 min, max session ~12 h. The auto-push
   caps lost progress at ~10 min.
 - **Never commit your PAT** into the repo.
